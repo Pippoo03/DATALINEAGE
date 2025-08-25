@@ -57,100 +57,68 @@ export const LineageVisualization: React.FC<LineageVisualizationProps> = ({
     rootId: string
   ): Map<string, { x: number; y: number }> => {
     const positions = new Map<string, { x: number; y: number }>();
-    const nodeLevels = new Map<string, number>();
+    const levels = new Map<string, number>();
+    const visited = new Set<string>();
     const nodesByLevel = new Map<number, string[]>();
     const horizontalSpacing = 500; // Much larger horizontal spacing
     const baseVerticalSpacing = 300; // Much larger vertical spacing
     const minVerticalGap = 250; // Much larger minimum gap
+    const maxNodesPerColumn = 3; // Limit nodes per column for better readability
     const jitterRange = 80; // Increased random offset
 
-    // Calculate dynamic levels based on node relationships
-    const calculateNodeLevels = (startId: string, initialLevel: number, isUpstream: boolean) => {
-      const queue: Array<{ id: string; level: number }> = [{ id: startId, level: initialLevel }];
-      const processed = new Set<string>();
-
-      while (queue.length > 0) {
-        const { id: currentId, level: currentLevel } = queue.shift()!;
-        
-        if (processed.has(currentId)) {
-          // If we've seen this node before, update its level if this path is more extreme
-          const existingLevel = nodeLevels.get(currentId)!;
-          if (isUpstream && currentLevel < existingLevel) {
-            nodeLevels.set(currentId, currentLevel);
-          } else if (!isUpstream && currentLevel > existingLevel) {
-            nodeLevels.set(currentId, currentLevel);
-          }
-          continue;
-        }
-
-        processed.add(currentId);
-        nodeLevels.set(currentId, currentLevel);
-
-        // Add the node to its level group
-        if (!nodesByLevel.has(currentLevel)) {
-          nodesByLevel.set(currentLevel, []);
-        }
-        nodesByLevel.get(currentLevel)!.push(currentId);
-
-        // Process connected nodes
-        if (isUpstream) {
-          // For upstream, look at edges where current node is the target
-          allEdges
-            .filter(edge => edge.target === currentId && edgeIds.includes(edge.id))
-            .forEach(edge => {
-              queue.push({ id: edge.source, level: currentLevel - 1 });
-            });
-        } else {
-          // For downstream, look at edges where current node is the source
-          allEdges
-            .filter(edge => edge.source === currentId && edgeIds.includes(edge.id))
-            .forEach(edge => {
-              queue.push({ id: edge.target, level: currentLevel + 1 });
-            });
-        }
+    // Calculate levels from root (0 = center, negative = upstream, positive = downstream)
+    const calculateLevels = (nodeId: string, level: number) => {
+      if (visited.has(nodeId)) return;
+      visited.add(nodeId);
+      
+      const currentLevel = levels.get(nodeId) || level;
+      if (Math.abs(level) < Math.abs(currentLevel) || (Math.abs(level) === Math.abs(currentLevel) && level > currentLevel)) {
+        levels.set(nodeId, level);
       }
+
+      // Find downstream nodes (positive levels)
+      allEdges
+        .filter(edge => edge.source === nodeId && edgeIds.includes(edge.id))
+        .forEach(edge => calculateLevels(edge.target, level + 1));
+
+      // Find upstream nodes (negative levels)
+      allEdges
+        .filter(edge => edge.target === nodeId && edgeIds.includes(edge.id))
+        .forEach(edge => calculateLevels(edge.source, level - 1));
     };
 
-    // Start from root and calculate levels in both directions
-    nodeLevels.set(rootId, 0);
-    nodesByLevel.set(0, [rootId]);
-    
-    // Calculate upstream levels (negative numbers)
-    calculateNodeLevels(rootId, 0, true);
-    
-    // Calculate downstream levels (positive numbers)
-    calculateNodeLevels(rootId, 0, false);
+    calculateLevels(rootId, 0);
 
-    // Process nodes level by level
-    const allLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
+    // Group nodes by level
+    levels.forEach((level, nodeId) => {
+      if (!nodesByLevel.has(level)) {
+        nodesByLevel.set(level, []);
+      }
+      nodesByLevel.get(level)!.push(nodeId);
+    });
+
+    // Sort levels and calculate positions with jitter
+    const sortedLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
     
-    allLevels.forEach(level => {
-      const nodesAtLevel = nodesByLevel.get(level) || [];
-      // Base x position is proportional to level
-      const baseX = level * horizontalSpacing;
+    sortedLevels.forEach(level => {
+      const nodesAtLevel = nodesByLevel.get(level)!;
+      const x = level * horizontalSpacing;
+      const totalHeight = (nodesAtLevel.length - 1) * baseVerticalSpacing;
+      const startY = -totalHeight / 2;
       
-      // Sort nodes by number of connections for better organization
+      // Sort nodes but preserve some randomness for more natural layout
       const sortedNodes = [...nodesAtLevel].sort((a, b) => {
         const edgesA = allEdges.filter(e => e.source === a || e.target === a).length;
         const edgesB = allEdges.filter(e => e.source === b || e.target === b).length;
-        return edgesB - edgesA;
+        return edgesB - edgesA; // Nodes with more connections go towards the center
       });
 
-      // Calculate vertical distribution
-      const totalHeight = (sortedNodes.length - 1) * baseVerticalSpacing;
-      const startY = -totalHeight / 2;
-
       sortedNodes.forEach((nodeId, index) => {
-        // Calculate base position
-        const baseY = startY + index * baseVerticalSpacing;
-        
-        // Add controlled randomness - less horizontal jitter for better alignment
-        const jitterX = (Math.random() * jitterRange - jitterRange / 2) * 0.5; // Reduced horizontal jitter
+        // Add slight random offset to y position
         const jitterY = Math.random() * jitterRange - jitterRange / 2;
-        
         positions.set(nodeId, {
-          x: baseX + jitterX,
-          y: baseY + jitterY
+          x: x + (Math.random() * 20 - 10), // Slight horizontal jitter
+          y: startY + index * baseVerticalSpacing + jitterY
         });
       });
     });

@@ -57,95 +57,104 @@ export const LineageVisualization: React.FC<LineageVisualizationProps> = ({
     rootId: string
   ): Map<string, { x: number; y: number }> => {
     const positions = new Map<string, { x: number; y: number }>();
-    const nodeLevels = new Map<string, number>();
+    const levels = new Map<string, number>();
+    const visited = new Set<string>();
     const nodesByLevel = new Map<number, string[]>();
     const horizontalSpacing = 500; // Much larger horizontal spacing
     const baseVerticalSpacing = 300; // Much larger vertical spacing
     const minVerticalGap = 250; // Much larger minimum gap
+    const maxNodesPerColumn = 3; // Limit nodes per column for better readability
     const jitterRange = 80; // Increased random offset
 
-    // Calculate dynamic levels based on node relationships
-    const calculateNodeLevels = (startId: string, initialLevel: number, isUpstream: boolean) => {
-      const queue: Array<{ id: string; level: number }> = [{ id: startId, level: initialLevel }];
-      const processed = new Set<string>();
+    // Separate nodes into upstream and downstream
+    const upstream = new Set<string>();
+    const downstream = new Set<string>();
+    
+    const collectLineage = (nodeId: string, isUpstream: boolean) => {
+      if (visited.has(nodeId)) return;
+      visited.add(nodeId);
 
-      while (queue.length > 0) {
-        const { id: currentId, level: currentLevel } = queue.shift()!;
-        
-        if (processed.has(currentId)) {
-          // If we've seen this node before, update its level if this path is more extreme
-          const existingLevel = nodeLevels.get(currentId)!;
-          if (isUpstream && currentLevel < existingLevel) {
-            nodeLevels.set(currentId, currentLevel);
-          } else if (!isUpstream && currentLevel > existingLevel) {
-            nodeLevels.set(currentId, currentLevel);
-          }
-          continue;
-        }
-
-        processed.add(currentId);
-        nodeLevels.set(currentId, currentLevel);
-
-        // Add the node to its level group
-        if (!nodesByLevel.has(currentLevel)) {
-          nodesByLevel.set(currentLevel, []);
-        }
-        nodesByLevel.get(currentLevel)!.push(currentId);
-
-        // Process connected nodes
+      if (nodeId !== rootId) {
         if (isUpstream) {
-          // For upstream, look at edges where current node is the target
-          allEdges
-            .filter(edge => edge.target === currentId && edgeIds.includes(edge.id))
-            .forEach(edge => {
-              queue.push({ id: edge.source, level: currentLevel - 1 });
-            });
+          upstream.add(nodeId);
+          levels.set(nodeId, -1); // All upstream nodes at level -1
         } else {
-          // For downstream, look at edges where current node is the source
-          allEdges
-            .filter(edge => edge.source === currentId && edgeIds.includes(edge.id))
-            .forEach(edge => {
-              queue.push({ id: edge.target, level: currentLevel + 1 });
-            });
+          downstream.add(nodeId);
+          levels.set(nodeId, 1); // All downstream nodes at level 1
         }
+      } else {
+        levels.set(nodeId, 0); // Root node at level 0
+      }
+
+      // Process upstream nodes
+      if (isUpstream) {
+        allEdges
+          .filter(edge => edge.target === nodeId && edgeIds.includes(edge.id))
+          .forEach(edge => collectLineage(edge.source, true));
+      }
+      // Process downstream nodes
+      else {
+        allEdges
+          .filter(edge => edge.source === nodeId && edgeIds.includes(edge.id))
+          .forEach(edge => collectLineage(edge.target, false));
       }
     };
 
-    // Start from root and calculate levels in both directions
-    nodeLevels.set(rootId, 0);
-    nodesByLevel.set(0, [rootId]);
-    
-    // Calculate upstream levels (negative numbers)
-    calculateNodeLevels(rootId, 0, true);
-    
-    // Calculate downstream levels (positive numbers)
-    calculateNodeLevels(rootId, 0, false);
+    // First collect upstream nodes
+    collectLineage(rootId, true);
+    // Reset visited for downstream collection
+    visited.clear();
+    // Then collect downstream nodes
+    collectLineage(rootId, false);
 
-    // Process nodes level by level
-    const allLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
+    // Group nodes by level (-1 for upstream, 0 for root, 1 for downstream)
+    upstream.forEach(nodeId => {
+      if (!nodesByLevel.has(-1)) {
+        nodesByLevel.set(-1, []);
+      }
+      nodesByLevel.get(-1)!.push(nodeId);
+    });
+
+    nodesByLevel.set(0, [rootId]);
+
+    downstream.forEach(nodeId => {
+      if (!nodesByLevel.has(1)) {
+        nodesByLevel.set(1, []);
+      }
+      nodesByLevel.get(1)!.push(nodeId);
+    });
+
+    // Sort levels and calculate positions with grid layout
+    const sortedLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
     
-    allLevels.forEach(level => {
-      const nodesAtLevel = nodesByLevel.get(level) || [];
-      // Base x position is proportional to level
-      const baseX = level * horizontalSpacing;
+    sortedLevels.forEach(level => {
+      const nodesAtLevel = nodesByLevel.get(level)!;
+      const x = level * horizontalSpacing;
       
-      // Sort nodes by number of connections for better organization
+      // Sort nodes and distribute them in a grid-like pattern
       const sortedNodes = [...nodesAtLevel].sort((a, b) => {
         const edgesA = allEdges.filter(e => e.source === a || e.target === a).length;
         const edgesB = allEdges.filter(e => e.source === b || e.target === b).length;
         return edgesB - edgesA;
       });
 
-      // Calculate vertical distribution
-      const totalHeight = (sortedNodes.length - 1) * baseVerticalSpacing;
-      const startY = -totalHeight / 2;
+      const nodesPerColumn = Math.min(maxNodesPerColumn, nodesAtLevel.length);
+      const numColumns = Math.ceil(nodesAtLevel.length / nodesPerColumn);
+      const columnWidth = 100; // Width of each sub-column within a level
 
       sortedNodes.forEach((nodeId, index) => {
-        // Calculate base position
-        const baseY = startY + index * baseVerticalSpacing;
+        const column = Math.floor(index / nodesPerColumn);
+        const rowInColumn = index % nodesPerColumn;
+        const columnOffset = column * columnWidth;
         
-        // Add controlled randomness - less horizontal jitter for better alignment
-        const jitterX = (Math.random() * jitterRange - jitterRange / 2) * 0.5; // Reduced horizontal jitter
+        // Calculate base position
+        const baseX = x + columnOffset;
+        const columnHeight = Math.min(nodesPerColumn, nodesAtLevel.length - column * nodesPerColumn) * baseVerticalSpacing;
+        const columnStartY = -columnHeight / 2;
+        const baseY = columnStartY + rowInColumn * baseVerticalSpacing;
+        
+        // Add controlled randomness
+        const jitterX = Math.random() * jitterRange - jitterRange / 2;
         const jitterY = Math.random() * jitterRange - jitterRange / 2;
         
         positions.set(nodeId, {
