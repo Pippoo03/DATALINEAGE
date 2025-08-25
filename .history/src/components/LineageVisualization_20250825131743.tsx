@@ -59,10 +59,10 @@ export const LineageVisualization: React.FC<LineageVisualizationProps> = ({
     const positions = new Map<string, { x: number; y: number }>();
     const nodeLevels = new Map<string, number>();
     const nodesByLevel = new Map<number, string[]>();
-    const horizontalSpacing = 500; // Much larger horizontal spacing
-    const baseVerticalSpacing = 300; // Much larger vertical spacing
-    const minVerticalGap = 250; // Much larger minimum gap
-    const jitterRange = 80; // Increased random offset
+    const horizontalSpacing = 250; // Reduced horizontal spacing
+    const baseVerticalSpacing = 150; // Reduced vertical spacing
+    const minVerticalGap = 120; // Reduced minimum gap
+    const jitterRange = 40; // Reduced random offset
 
     // Calculate dynamic levels based on node relationships
     const calculateNodeLevels = (startId: string, initialLevel: number, isUpstream: boolean) => {
@@ -121,35 +121,64 @@ export const LineageVisualization: React.FC<LineageVisualizationProps> = ({
     // Calculate downstream levels (positive numbers)
     calculateNodeLevels(rootId, 0, false);
 
-    // Process nodes level by level
-    const allLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
+    // First, redistribute nodes if any level has more than 10 nodes
+    const maxNodesPerLevel = 10;
+    const redistributeLevels = () => {
+      const newNodesByLevel = new Map<number, string[]>();
+      
+      Array.from(nodesByLevel.entries()).forEach(([level, nodes]) => {
+        if (nodes.length <= maxNodesPerLevel) {
+          // If level has 10 or fewer nodes, keep as is
+          newNodesByLevel.set(level, nodes);
+        } else {
+          // If level has more than 10 nodes, split into sub-levels
+          const numSubLevels = Math.ceil(nodes.length / maxNodesPerLevel);
+          const sortedNodes = [...nodes].sort((a, b) => {
+            const edgesA = allEdges.filter(e => e.source === a || e.target === a).length;
+            const edgesB = allEdges.filter(e => e.source === b || e.target === b).length;
+            return edgesB - edgesA;
+          });
+          
+          // Create sub-levels with small offset from original level
+          for (let i = 0; i < numSubLevels; i++) {
+            const subLevel = level + (i * 0.1); // Small offset to keep sub-levels close together
+            const startIdx = i * maxNodesPerLevel;
+            const subLevelNodes = sortedNodes.slice(startIdx, startIdx + maxNodesPerLevel);
+            newNodesByLevel.set(subLevel, subLevelNodes);
+          }
+        }
+      });
+      
+      return newNodesByLevel;
+    };
+
+    // Redistribute nodes and get new level assignments
+    const redistributedNodesByLevel = redistributeLevels();
+    
+    // Process nodes level by level with redistributed levels
+    const allLevels = Array.from(redistributedNodesByLevel.keys()).sort((a, b) => a - b);
     
     allLevels.forEach(level => {
-      const nodesAtLevel = nodesByLevel.get(level) || [];
-      // Base x position is proportional to level
-      const baseX = level * horizontalSpacing;
+      const nodesAtLevel = redistributedNodesByLevel.get(level) || [];
+      // Base x position is proportional to level, using floor to keep sub-levels close
+      const baseX = Math.floor(level) * horizontalSpacing;
+      // Add small offset for sub-levels
+      const subLevelOffset = (level % 1) * horizontalSpacing * 0.2;
       
-      // Sort nodes by number of connections for better organization
-      const sortedNodes = [...nodesAtLevel].sort((a, b) => {
-        const edgesA = allEdges.filter(e => e.source === a || e.target === a).length;
-        const edgesB = allEdges.filter(e => e.source === b || e.target === b).length;
-        return edgesB - edgesA;
-      });
-
       // Calculate vertical distribution
-      const totalHeight = (sortedNodes.length - 1) * baseVerticalSpacing;
+      const totalHeight = (nodesAtLevel.length - 1) * baseVerticalSpacing;
       const startY = -totalHeight / 2;
 
-      sortedNodes.forEach((nodeId, index) => {
+      nodesAtLevel.forEach((nodeId, index) => {
         // Calculate base position
         const baseY = startY + index * baseVerticalSpacing;
         
         // Add controlled randomness - less horizontal jitter for better alignment
-        const jitterX = (Math.random() * jitterRange - jitterRange / 2) * 0.5; // Reduced horizontal jitter
+        const jitterX = (Math.random() * jitterRange - jitterRange / 2) * 0.3; // Reduced horizontal jitter
         const jitterY = Math.random() * jitterRange - jitterRange / 2;
         
         positions.set(nodeId, {
-          x: baseX + jitterX,
+          x: baseX + subLevelOffset + jitterX,
           y: baseY + jitterY
         });
       });
@@ -292,15 +321,17 @@ export const LineageVisualization: React.FC<LineageVisualizationProps> = ({
 
     // Fit view after nodes are set
     setTimeout(() => {
-      fitView({ padding: 0.1, duration: 800 });
       setIsGenerating(false);
-    }, 100);
+      fitView({ padding: 0.2, duration: 800 });
+    }, 300);
   }, [components, edges, config, setNodes, setEdges, fitView, generateHierarchicalLayout]);
 
   // Update layout when config changes
   useEffect(() => {
-    generateLineage();
-  }, [generateLineage]);
+    if (config.selectedComponentId && components.length > 0 && edges.length > 0) {
+      generateLineage();
+    }
+  }, [generateLineage, config.selectedComponentId, components.length, edges.length]);
 
   if (isGenerating) {
     return (

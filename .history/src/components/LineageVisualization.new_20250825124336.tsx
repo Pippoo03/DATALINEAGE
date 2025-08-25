@@ -57,105 +57,63 @@ export const LineageVisualization: React.FC<LineageVisualizationProps> = ({
     rootId: string
   ): Map<string, { x: number; y: number }> => {
     const positions = new Map<string, { x: number; y: number }>();
-    const nodeLevels = new Map<string, number>();
+    const levels = new Map<string, number>();
+    const visited = new Set<string>();
     const nodesByLevel = new Map<number, string[]>();
-    const horizontalSpacing = 500; // Much larger horizontal spacing
-    const baseVerticalSpacing = 300; // Much larger vertical spacing
-    const minVerticalGap = 250; // Much larger minimum gap
-    const jitterRange = 80; // Increased random offset
+    const horizontalSpacing = 400;
+    const verticalSpacing = 180;
+    const minVerticalGap = 140;
 
-    // Calculate dynamic levels based on node relationships
-    const calculateNodeLevels = (startId: string, initialLevel: number, isUpstream: boolean) => {
-      const queue: Array<{ id: string; level: number }> = [{ id: startId, level: initialLevel }];
-      const processed = new Set<string>();
-
-      while (queue.length > 0) {
-        const { id: currentId, level: currentLevel } = queue.shift()!;
-        
-        if (processed.has(currentId)) {
-          // If we've seen this node before, update its level if this path is more extreme
-          const existingLevel = nodeLevels.get(currentId)!;
-          if (isUpstream && currentLevel < existingLevel) {
-            nodeLevels.set(currentId, currentLevel);
-          } else if (!isUpstream && currentLevel > existingLevel) {
-            nodeLevels.set(currentId, currentLevel);
-          }
-          continue;
-        }
-
-        processed.add(currentId);
-        nodeLevels.set(currentId, currentLevel);
-
-        // Add the node to its level group
-        if (!nodesByLevel.has(currentLevel)) {
-          nodesByLevel.set(currentLevel, []);
-        }
-        nodesByLevel.get(currentLevel)!.push(currentId);
-
-        // Process connected nodes
-        if (isUpstream) {
-          // For upstream, look at edges where current node is the target
-          allEdges
-            .filter(edge => edge.target === currentId && edgeIds.includes(edge.id))
-            .forEach(edge => {
-              queue.push({ id: edge.source, level: currentLevel - 1 });
-            });
-        } else {
-          // For downstream, look at edges where current node is the source
-          allEdges
-            .filter(edge => edge.source === currentId && edgeIds.includes(edge.id))
-            .forEach(edge => {
-              queue.push({ id: edge.target, level: currentLevel + 1 });
-            });
-        }
+    // Calculate levels from root (0 = center, negative = upstream, positive = downstream)
+    const calculateLevels = (nodeId: string, level: number) => {
+      if (visited.has(nodeId)) return;
+      visited.add(nodeId);
+      
+      const currentLevel = levels.get(nodeId) || level;
+      if (Math.abs(level) < Math.abs(currentLevel) || (Math.abs(level) === Math.abs(currentLevel) && level > currentLevel)) {
+        levels.set(nodeId, level);
       }
+
+      // Find downstream nodes (positive levels)
+      allEdges
+        .filter(edge => edge.source === nodeId && edgeIds.includes(edge.id))
+        .forEach(edge => calculateLevels(edge.target, level + 1));
+
+      // Find upstream nodes (negative levels)
+      allEdges
+        .filter(edge => edge.target === nodeId && edgeIds.includes(edge.id))
+        .forEach(edge => calculateLevels(edge.source, level - 1));
     };
 
-    // Start from root and calculate levels in both directions
-    nodeLevels.set(rootId, 0);
-    nodesByLevel.set(0, [rootId]);
-    
-    // Calculate upstream levels (negative numbers)
-    calculateNodeLevels(rootId, 0, true);
-    
-    // Calculate downstream levels (positive numbers)
-    calculateNodeLevels(rootId, 0, false);
+    calculateLevels(rootId, 0);
 
-    // Process nodes level by level
-    const allLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
-    
-    allLevels.forEach(level => {
-      const nodesAtLevel = nodesByLevel.get(level) || [];
-      // Base x position is proportional to level
-      const baseX = level * horizontalSpacing;
-      
-      // Sort nodes by number of connections for better organization
-      const sortedNodes = [...nodesAtLevel].sort((a, b) => {
-        const edgesA = allEdges.filter(e => e.source === a || e.target === a).length;
-        const edgesB = allEdges.filter(e => e.source === b || e.target === b).length;
-        return edgesB - edgesA;
-      });
+    // Group nodes by level
+    levels.forEach((level, nodeId) => {
+      if (!nodesByLevel.has(level)) {
+        nodesByLevel.set(level, []);
+      }
+      nodesByLevel.get(level)!.push(nodeId);
+    });
 
-      // Calculate vertical distribution
-      const totalHeight = (sortedNodes.length - 1) * baseVerticalSpacing;
+    // Sort levels and calculate positions
+    const sortedLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
+    
+    sortedLevels.forEach(level => {
+      const nodesAtLevel = nodesByLevel.get(level)!;
+      const x = level * horizontalSpacing;
+      const totalHeight = (nodesAtLevel.length - 1) * verticalSpacing;
       const startY = -totalHeight / 2;
+      const sortedNodes = [...nodesAtLevel].sort();
 
       sortedNodes.forEach((nodeId, index) => {
-        // Calculate base position
-        const baseY = startY + index * baseVerticalSpacing;
-        
-        // Add controlled randomness - less horizontal jitter for better alignment
-        const jitterX = (Math.random() * jitterRange - jitterRange / 2) * 0.5; // Reduced horizontal jitter
-        const jitterY = Math.random() * jitterRange - jitterRange / 2;
-        
         positions.set(nodeId, {
-          x: baseX + jitterX,
-          y: baseY + jitterY
+          x,
+          y: startY + index * verticalSpacing
         });
       });
     });
 
-    // Enhanced overlap prevention
+    // Adjust positions to prevent overlaps
     const adjustForOverlaps = () => {
       const levelGroups = new Map<number, Array<{ id: string; x: number; y: number }>>();
       
@@ -167,26 +125,20 @@ export const LineageVisualization: React.FC<LineageVisualizationProps> = ({
         levelGroups.get(level)!.push({ id: nodeId, x: pos.x, y: pos.y });
       });
       
-      // Multiple passes to ensure no overlaps
-      const numPasses = 2;
-      for (let pass = 0; pass < numPasses; pass++) {
-        levelGroups.forEach(nodes => {
-          nodes.sort((a, b) => a.y - b.y);
+      levelGroups.forEach(nodes => {
+        nodes.sort((a, b) => a.y - b.y);
+        
+        for (let i = 1; i < nodes.length; i++) {
+          const current = nodes[i];
+          const previous = nodes[i - 1];
+          const minDistance = minVerticalGap;
           
-          for (let i = 1; i < nodes.length; i++) {
-            const current = nodes[i];
-            const previous = nodes[i - 1];
-            const gap = current.y - previous.y;
-            
-            if (gap < minVerticalGap) {
-              // Add some randomness to the spacing
-              const adjustment = minVerticalGap - gap + (Math.random() * 20);
-              current.y = previous.y + adjustment;
-              positions.set(current.id, { x: current.x, y: current.y });
-            }
+          if (current.y - previous.y < minDistance) {
+            current.y = previous.y + minDistance;
+            positions.set(current.id, { x: current.x, y: current.y });
           }
-        });
-      }
+        }
+      });
     };
     
     adjustForOverlaps();

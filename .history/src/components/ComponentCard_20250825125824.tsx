@@ -74,7 +74,7 @@ export const ComponentCard: React.FC<ComponentCardProps> = ({
         </div>
         <div className="flex items-center gap-1">
           {component.hasFailed ? (
-            <AlertCircle className="h-4 w-4 text-red-500"/>
+            <AlertCircle className="h-4 w-4 text-red-500" />
           ) : (
             <CheckCircle className="h-4 w-4 text-green-500" />
           )}

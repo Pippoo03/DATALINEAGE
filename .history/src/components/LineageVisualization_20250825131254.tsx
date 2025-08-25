@@ -121,12 +121,12 @@ export const LineageVisualization: React.FC<LineageVisualizationProps> = ({
     // Calculate downstream levels (positive numbers)
     calculateNodeLevels(rootId, 0, false);
 
-    // Process nodes level by level
-    const allLevels = Array.from(nodesByLevel.keys()).sort((a, b) => a - b);
+    // Process nodes level by level (upstream -> root -> downstream)
+    const levels = [-1, 0, 1];
     
-    allLevels.forEach(level => {
+    levels.forEach(level => {
       const nodesAtLevel = nodesByLevel.get(level) || [];
-      // Base x position is proportional to level
+      // Base x position: left for upstream, center for root, right for downstream
       const baseX = level * horizontalSpacing;
       
       // Sort nodes by number of connections for better organization
